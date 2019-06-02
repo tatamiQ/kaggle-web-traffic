@@ -86,6 +86,7 @@ def read_x(start, end) -> pd.DataFrame:
 
 
 @numba.jit(nopython=True)
+# 计算自相关性
 def single_autocorr(series, lag):
     """
     Autocorrelation for single data series
@@ -118,7 +119,7 @@ def batch_autocorr(data, lag, starts, ends, threshold, backoffset=0):
     """
     n_series = data.shape[0]
     n_days = data.shape[1]
-    max_end = n_days - backoffset
+    max_end = n_days - backoffset #设定最大的结束日期
     corr = np.empty(n_series, dtype=np.float64)
     support = np.empty(n_series, dtype=np.float64)
     for i in range(n_series):
@@ -181,9 +182,10 @@ def prepare_data(start, end, valid_threshold) -> Tuple[pd.DataFrame, pd.DataFram
     inv_mask = ~page_mask
     df = df[inv_mask]
     nans = pd.isnull(df)
+    # 返回lop1p平滑的结果，是否nan的布尔矩阵，所有记录中长度达到阈值的开始序号和结束序号
     return np.log1p(df.fillna(0)), nans, starts[inv_mask], ends[inv_mask]
 
-
+# 计算3，6，9，12月回溯的lag
 def lag_indexes(begin, end) -> List[pd.Series]:
     """
     Calculates indexes for 3, 6, 9, 12 months backward lag for the given date range
@@ -194,11 +196,12 @@ def lag_indexes(begin, end) -> List[pd.Series]:
     """
     dr = pd.date_range(begin, end)
     # key is date, value is day index
-    base_index = pd.Series(np.arange(0, len(dr)), index=dr)
+    base_index = pd.Series(np.arange(0, len(dr)), index=dr) 
 
     def lag(offset):
         dates = dr - offset
-        return pd.Series(data=base_index.loc[dates].fillna(-1).astype(np.int16).values, index=dr)
+        return pd.Series(data=base_index.loc[dates].fillna(-1).astype(np.int16).values, index=dr) 
+        #回溯期间的na值赋值 -1，回溯后的值通过index和回溯前的时间对应上
 
     return [lag(pd.DateOffset(months=m)) for m in (3, 6, 9, 12)]
 
@@ -209,9 +212,9 @@ def make_page_features(pages: np.ndarray) -> pd.DataFrame:
     :param pages: Source urls
     :return: DataFrame with features as columns and urls as index
     """
-    tagged = extractor.extract(pages).set_index('page')
+    tagged = extractor.extract(pages).set_index('page') # extract中提取页面的国家、词、代理、州的信息，组成dataframe
     # Drop useless features
-    features: pd.DataFrame = tagged.drop(['term', 'marker'], axis=1)
+    features: pd.DataFrame = tagged.drop(['term', 'marker'], axis=1) # 获取page的特征
     return features
 
 
@@ -267,6 +270,7 @@ def run():
     parser.add_argument('--start', help="Effective start date. Data before the start is dropped")
     parser.add_argument('--end', help="Effective end date. Data past the end is dropped")
     parser.add_argument('--corr_backoffset', default=0, type=int, help='Offset for correlation calculation')
+    # 给程序添加参数及默认值
     args = parser.parse_args()
 
     # Get the data
@@ -281,7 +285,7 @@ def run():
 
     # Group unique pages by agents
     assert df.index.is_monotonic_increasing
-    page_map = uniq_page_map(df.index.values)
+    page_map = uniq_page_map(df.index.values) #按不同的agents分组，统计页面个数
 
     # Yearly(annual) autocorrelation
     raw_year_autocorr = batch_autocorr(df.values, 365, starts, ends, 1.5, args.corr_backoffset)
@@ -294,25 +298,27 @@ def run():
     print("Percent of undefined autocorr = yearly:%.3f, quarterly:%.3f" % (year_unknown_pct, quarter_unknown_pct))
 
     # Normalise all the things
-    year_autocorr = normalize(np.nan_to_num(raw_year_autocorr))
+    year_autocorr = normalize(np.nan_to_num(raw_year_autocorr))  # 0代替nan, 1.79769313e+308代替inf
     quarter_autocorr = normalize(np.nan_to_num(raw_quarter_autocorr))
 
     # Calculate and encode page features
-    page_features = make_page_features(df.index.values)
-    encoded_page_features = encode_page_features(page_features)
+    #  page_features的dataframe
+    page_features = make_page_features(df.index.values) #入参类型 np.narray
+    encoded_page_features = encode_page_features(page_features) # 做one-hot编码，标准化
 
     # Make time-dependent features
-    features_days = pd.date_range(data_start, features_end)
+    features_days = pd.date_range(data_start, features_end) # 产生一个DatetimeIndex，就是时间序列数据的索引
     #dow = normalize(features_days.dayofweek.values)
     week_period = 7 / (2 * np.pi)
-    dow_norm = features_days.dayofweek.values / week_period
-    dow = np.stack([np.cos(dow_norm), np.sin(dow_norm)], axis=-1)
+    dow_norm = features_days.dayofweek.values / week_period # dayofweek，周中的第几天，Monday=0, Sunday=6
+    dow = np.stack([np.cos(dow_norm), np.sin(dow_norm)], axis=-1) 
 
     # Assemble indices for quarterly lagged data
-    lagged_ix = np.stack(lag_indexes(data_start, features_end), axis=-1)
-
-    page_popularity = df.median(axis=1)
-    page_popularity = (page_popularity - page_popularity.mean()) / page_popularity.std()
+    # 当axis = 1时，对二维平面的行进行增加，所以本来应该是1行的，经过x2填充变成了2行
+    lagged_ix = np.stack(lag_indexes(data_start, features_end), axis=-1)  
+    
+    page_popularity = df.median(axis=1) # 按行求中位数
+    page_popularity = (page_popularity - page_popularity.mean()) / page_popularity.std() #标准化
 
     # Put NaNs back
     df[nans] = np.NaN
