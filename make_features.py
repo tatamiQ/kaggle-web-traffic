@@ -67,7 +67,7 @@ def make_holidays(tagged, start, end) -> pd.DataFrame:
     result.columns = pd.DatetimeIndex(result.columns.values)
     return result
 
-
+# 默认读全量，有范围序号则控制输出范围
 def read_x(start, end) -> pd.DataFrame:
     """
     Gets source data from start to end date. Any date can be None
